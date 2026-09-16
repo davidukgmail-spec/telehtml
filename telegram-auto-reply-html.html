@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Telegram Auto-Reply HTML</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f9f9f9;
+    }
+    .box {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h2 {
+      color: #0088cc;
+      margin-top: 0;
+    }
+    button {
+      background: #0088cc;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      margin-right: 10px;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background: #006699;
+    }
+    button:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+    }
+    .success-btn {
+      background: #4CAF50;
+    }
+    .success-btn:hover {
+      background: #388E3C;
+    }
+    .danger-btn {
+      background: #f44336;
+    }
+    .danger-btn:hover {
+      background: #d32f2f;
+    }
+    #status {
+      margin: 15px 0;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    .status-info {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+    .status-success {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    .status-error {
+      background: #ffebee;
+      color: #c62828;
+    }
+    .log-entry {
+      padding: 8px;
+      margin: 5px 0;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: monospace;
+    }
+    .log-success {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    .log-error {
+      background: #ffebee;
+      color: #c62828;
+    }
+    .log-info {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+    #logContainer {
+      max-height: 400px;
+      overflow-y: auto;
+      margin-top: 15px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 10px;
+      background: white;
+    }
+    .note {
+      font-size: 13px;
+      color: #555;
+      margin-top: 15px;
+      padding: 10px;
+      background: #fff3cd;
+      border-radius: 4px;
+    }
+    .stats {
+      display: flex;
+      gap: 20px;
+      margin: 15px 0;
+      font-size: 14px;
+    }
+    .stat-item {
+      padding: 8px 12px;
+      background: #e3f2fd;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>🤖 Telegram Auto-Reply (HTML Version)</h2>
+    <p>Automatically replies to users who sent videos but haven't received a direct URL yet.</p>
+    
+    <div class="stats">
+      <span class="stat-item">📊 Replied: <span id="repliedCount">0</span></span>
+      <span class="stat-item">⏳ Pending: <span id="pendingCount">0</span></span>
+      <span class="stat-item">✅ Total: <span id="totalCount">0</span></span>
+    </div>
+    
+    <div>
+      <button onclick="checkAndReply()" id="checkBtn">🔄 Check & Reply to New Videos</button>
+      <button onclick="startAutoMode()" id="autoBtn">▶️ Start Auto-Mode (30s)</button>
+      <button onclick="stopAutoMode()" id="stopBtn" disabled>⏹️ Stop Auto-Mode</button>
+      <button onclick="clearProcessed()" class="danger-btn">🗑️ Clear Processed Messages</button>
+    </div>
+    
+    <div id="status" class="status-info">⏳ Ready. Click "Check & Reply" to start.</div>
+    
+    <div id="logContainer"></div>
+    
+    <p class="note">
+      ⚠️ <strong>Run this via a local server</strong> (not file://) or CORS will block requests.<br>
+      Example: <code>python -m http.server 8000</code> then open <code>http://localhost:8000</code><br>
+      ⚠️ <strong>Do NOT host this publicly</strong> - your bot token is embedded in this file.<br>
+      ⚠️ This will <strong>send actual messages</strong> to users from your bot!
+    </p>
+  </div>
+
+  <script>
+    // === YOUR BOT TOKEN (KEEP THIS PRIVATE) ===
+    const BOT_TOKEN = "8659114493:AAE4Zj-UpxpIbrAoyYZjTyA3oR2v9GpSbzE";
+    const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+    
+    // Track processed message IDs in localStorage
+    const STORAGE_KEY = 'telegramProcessedMessages';
+    
+    let autoModeInterval = null;
+    let stats = { replied: 0, pending: 0, total: 0 };
+    
+    // Load processed messages from localStorage
+    function loadProcessedMessages() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        return saved ? new Set(JSON.parse(saved)) : new Set();
+      } catch (e) {
+        return new Set();
+      }
+    }
+    
+    // Save processed messages to localStorage
+    function saveProcessedMessages(processed) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(processed)));
+      } catch (e) {
+        console.error("Could not save to localStorage:", e);
+      }
+    }
+    
+    // Add message to processed set
+    function addProcessedMessage(messageId) {
+      const processed = loadProcessedMessages();
+      processed.add(messageId);
+      saveProcessedMessages(processed);
+      return processed;
+    }
+    
+    // Check if message is processed
+    function isProcessed(messageId) {
+      const processed = loadProcessedMessages();
+      return processed.has(messageId);
+    }
+    
+    // Clear all processed messages
+    function clearProcessed() {
+      if (confirm('⚠️ Are you sure? This will cause the bot to reply to ALL previous videos again!')) {
+        localStorage.removeItem(STORAGE_KEY);
+        addLog('ℹ️ Cleared all processed messages. Next check will reply to all videos.', 'info');
+      }
+    }
+    
+    // Add log entry
+    function addLog(message, type = 'info') {
+      const container = document.getElementById('logContainer');
+      const entry = document.createElement('div');
+      entry.className = `log-entry log-${type}`;
+      entry.textContent = message;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    // Update status
+    function updateStatus(message, type = 'info') {
+      const statusDiv = document.getElementById('status');
+      statusDiv.textContent = message;
+      statusDiv.className = `status-${type}`;
+    }
+    
+    // Update stats
+    function updateStats() {
+      document.getElementById('repliedCount').textContent = stats.replied;
+      document.getElementById('pendingCount').textContent = stats.pending;
+      document.getElementById('totalCount').textContent = stats.total;
+    }
+    
+    // Reset stats
+    function resetStats() {
+      stats = { replied: 0, pending: 0, total: 0 };
+      updateStats();
+    }
+    
+    // Fetch updates from Telegram
+    async function fetchUpdates(offset = null) {
+      let url = `${BASE_URL}/getUpdates?timeout=5`;
+      if (offset) {
+        url += `&offset=${offset}`;
+      }
+      
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (!data.ok) {
+          throw new Error(data.description || 'Failed to fetch updates');
+        }
+        
+        return data.result || [];
+      } catch (error) {
+        throw new Error(`Network error: ${error.message}`);
+      }
+    }
+    
+    // Get file path from file_id
+    async function getFilePath(fileId) {
+      const url = `${BASE_URL}/getFile?file_id=${fileId}`;
+      
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (!data.ok || !data.result || !data.result.file_path) {
+          throw new Error(data.description || 'Failed to get file path');
+        }
+        
+        return data.result.file_path;
+      } catch (error) {
+        throw new Error(`Error getting file path: ${error.message}`);
+      }
+    }
+    
+    // Send message to chat
+    async function sendMessage(chatId, text, replyToMessageId = null) {
+      const url = `${BASE_URL}/sendMessage`;
+      const payload = {
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'HTML'
+      };
+      
+      if (replyToMessageId) {
+        payload.reply_to_message_id = replyToMessageId;
+      }
+      
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        const data = await response.json();
+        
+        if (!data.ok) {
+          throw new Error(data.description || 'Failed to send message');
+        }
+        
+        return data.result;
+      } catch (error) {
+        throw new Error(`Network error: ${error.message}`);
+      }
+    }
+    
+    // Check if bot has already replied to a message
+    async function hasBotReplied(chatId, originalMessageId) {
+      // Fetch recent messages in the chat
+      // Note: This is a simplified check - we look for messages from the bot
+      // that are replies to the original message
+      try {
+        const url = `${BASE_URL}/getChat?chat_id=${chatId}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        // For simplicity, we'll just check if we've processed this message before
+        // A more robust solution would check message history, but that requires
+        // more complex logic and additional API calls
+        return isProcessed(originalMessageId);
+      } catch (error) {
+        // If we can't check, assume we haven't replied
+        return false;
+      }
+    }
+    
+    // Process a single update
+    async function processUpdate(update) {
+      const message = update.message || update.channel_post;
+      if (!message) return false;
+      
+      const messageId = message.message_id;
+      const chatId = message.chat.id;
+      const chatType = message.chat.type;
+      
+      // Skip if already processed
+      if (isProcessed(messageId)) {
+        return false;
+      }
+      
+      // Check for video
+      const video = message.video;
+      if (!video) return false;
+      
+      const fileId = video.file_id;
+      if (!fileId) return false;
+      
+      addLog(`ℹ️ Found unprocessed video in ${chatType} (ID: ${chatId})`, 'info');
+      stats.pending++;
+      updateStats();
+      
+      try {
+        // Get file path
+        const filePath = await getFilePath(fileId);
+        if (!filePath) {
+          addLog(`❌ Could not get file path for video in chat ${chatId}`, 'error');
+          return false;
+        }
+        
+        const directUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+        
+        // Create reply message
+        const replyText = (
+          `📹 <b>Direct Video URL:</b>\n\n` +
+          `<code>${directUrl}</code>\n\n` +
+          `📌 <b>To stream in VLC:</b>\n` +
+          `<code>vlc "${directUrl}"</code>\n\n` +
+          `📌 <b>To stream in MPV:</b>\n` +
+          `<code>mpv "${directUrl}"</code>\n\n` +
+          `📌 <b>To embed in HTML:</b>\n` +
+          `<code>&lt;video controls src="${directUrl}"&gt;&lt;/video&gt;</code>`
+        );
+        
+        // Send reply
+        const result = await sendMessage(chatId, replyText, messageId);
+        if (result) {
+          addLog(`✅ Replied to chat ${chatId} with direct URL`, 'success');
+          stats.replied++;
+          stats.pending--;
+          addProcessedMessage(messageId);
+          updateStats();
+          return true;
+        } else {
+          addLog(`❌ Failed to send reply to chat ${chatId}`, 'error');
+          return false;
+        }
+      } catch (error) {
+        addLog(`❌ Error processing video in chat ${chatId}: ${error.message}`, 'error');
+        return false;
+      }
+    }
+    
+    // Check and reply to new videos
+    async function checkAndReply() {
+      updateStatus('🔍 Fetching updates from Telegram...', 'info');
+      addLog('🔍 Starting check for new videos...', 'info');
+      resetStats();
+      
+      try {
+        const updates = await fetchUpdates();
+        addLog(`ℹ️ Found ${updates.length} update(s)`, 'info');
+        
+        if (updates.length === 0) {
+          updateStatus('ℹ️ No new updates found', 'info');
+          return;
+        }
+        
+        let repliedCount = 0;
+        for (const update of updates) {
+          const result = await processUpdate(update);
+          if (result) repliedCount++;
+        }
+        
+        stats.total = updates.length;
+        updateStats();
+        
+        if (repliedCount > 0) {
+          updateStatus(`✅ Replied to ${repliedCount} new video(s)!`, 'success');
+        } else {
+          updateStatus('ℹ️ No new videos to reply to', 'info');
+        }
+        
+        addLog(`✅ Check complete. Replied to ${repliedCount} video(s).`, 'success');
+      } catch (error) {
+        updateStatus(`❌ Error: ${error.message}`, 'error');
+        addLog(`❌ Error: ${error.message}`, 'error');
+      }
+    }
+    
+    // Start auto-mode
+    function startAutoMode() {
+      if (autoModeInterval) {
+        stopAutoMode();
+      }
+      
+      updateStatus('🔄 Auto-mode started (checks every 30 seconds)', 'info');
+      addLog('🔄 Auto-mode started (30s interval)', 'info');
+      
+      checkAndReply();
+      autoModeInterval = setInterval(checkAndReply, 30000);
+      
+      document.getElementById('autoBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('checkBtn').disabled = true;
+    }
+    
+    // Stop auto-mode
+    function stopAutoMode() {
+      if (autoModeInterval) {
+        clearInterval(autoModeInterval);
+        autoModeInterval = null;
+      }
+      
+      updateStatus('⏹️ Auto-mode stopped', 'info');
+      addLog('⏹️ Auto-mode stopped', 'info');
+      
+      document.getElementById('autoBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.getElementById('checkBtn').disabled = false;
+    }
+    
+    // Auto-check on page load
+    window.onload = function() {
+      addLog('ℹ️ Page loaded. Ready to check for new videos.', 'info');
+    };
+  </script>
+</body>
+</html>
